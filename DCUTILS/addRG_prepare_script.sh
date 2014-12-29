@@ -24,7 +24,7 @@ bamFolder=/goon2/project99/bipolargenomes_raw/ingest
 iFolder=$bamFolder
 oFolder=$homeFolder
 oFolder=$bamFolder/forlab/addRG
-# I am writig these back on goon2 to avoid restrictions on my quota
+# I am writing these back on goon2 to avoid restrictions on my quota
 
 if [ ! -e $oFolder ]; then mkdir $oFolder; fi
 supportFrame=$oFolder/addRGsupport.tab
@@ -76,6 +76,8 @@ echo firstLineToBeIgnored > $mainTable
     #end of while loop
 
 njobs=`cat $mainTable | wc -l`
+njobs=$njobs-1 # ignore first line
+
 echo "
 #!/bin/bash
 #$ -S /bin/bash
