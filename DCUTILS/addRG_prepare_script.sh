@@ -12,7 +12,7 @@ java17=/share/apps/jdk1.7.0_45/jre/bin/java
 homeFolder=/cluster/project8/bipolargenomes
 tempFolder=/scratch2/vyp-scratch2/vincent/temp/novoalign
 
-nhours=10
+nhours=20
 ncores=1
 vmem=6 ##DC changed from 1 to try to get makegVCF to work
 memory=2
@@ -76,7 +76,7 @@ echo firstLineToBeIgnored > $mainTable
     #end of while loop
 
 njobs=`cat $mainTable | wc -l`
-njobs=$njobs-1 # ignore first line
+njobs=$(( njobs - 1 )) # ignore first line
 
 echo "
 #!/bin/bash
