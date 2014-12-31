@@ -26,10 +26,14 @@ function mode_align() {
     output=${projectID}/align/data/
     mkdir -p $output
     ##10 days? Perhaps more.
-    nhours=240
-    ncores=6
-    vmem=2.6
-    memory2=7
+    nhours=${nhours-240}
+    ncores=${ncores-6}
+    vmem=${vmem-2.6}
+    ##used for the sort function, seem to crash when using 10
+    #memory2=5
+    memory2=${memory2-7}
+    #
+    tparam=${tparam:-250}
     for file in $novoalignRef
     do
     ls -lh $file
@@ -50,6 +54,8 @@ function mode_align() {
             echo ${output}/${code}_sorted_unique.bam.bai does not exist
             if [ ! -e $f1 ]; then stop "$f1 does not exist"; fi
             if [ ! -e $f2 ]; then stop "$f2 does not exist"; fi
+            # delete contents of temp dir [vplagnol/pipelines/issues/11]
+            rm -f ${tempFolder}/${code}/*
             mkdir -p ${tempFolder}/${code} 
             echo "
 $novoalign -c ${ncores} -o SAM $'@RG\tID:${extraID}${code}\tSM:${extraID}${code}\tLB:${extraID}$code\tPL:ILLUMINA' --rOQ --hdrhd 3 -H -k -a -o Soft -t ${tparam} -F ${inputFormat} -f ${f1} ${f2}  -d ${novoalignRef} | ${samblaster} -e -d ${output}/${code}_disc.sam  | ${samtools} view -Sb - > ${output}/${code}.bam
@@ -78,8 +84,9 @@ function mode_gvcf_unsplit() {
     input=${projectID}/align/data/
     output=${projectID}/gvcf_unsplit/data/
     mkdir -p $output
-    nhours=72
-    vmem=8
+    nhours=${nhours-72}
+    ncores=${ncores-1}
+    vmem=${vmem-8}
     #memory2=6
     # GATK_HaplotypeCaller requires a sequence dictionary
     # Maybe the following should be submitted as interactive long job?
@@ -137,8 +144,9 @@ function mode_gvcf() {
     input=${projectID}/align/data/
     output=${projectID}/gvcf/data/
     mkdir -p $output
-    nhours=24
-    vmem=8
+    nhours=${nhours-24}
+    ncores=${ncores-1}
+    vmem=${vmem-8}
     #script files get regenerated on every run
     rm -f ${projectID}/gvcf/scripts/*.sh
     #memory2=6
@@ -202,8 +210,9 @@ function mode_gvcf() {
 # Take as input the per sample gVCF files and produces the combined gvcf file.
 # Splits by chromosome.
 function mode_combinegvcf() {
-    nhours=12
-    vmem=4
+    nhours=${nhours-12}
+    ncores=${ncores-1}
+    vmem=${vmem-4}
     ##one script per chromosome
     for chrCode in `seq 1 $cleanChrLen`
     do
@@ -230,8 +239,9 @@ function mode_jointgvcf() {
     input=${projectID}/gvcf/data/
     output=${projectID}/jointgvcf/data/
     mkdir -p ${output}
-    nhours=12
-    vmem=4
+    nhours=${nhours-12}
+    ncores=${ncores-1}
+    vmem=${vmem-4}
     rm -f ${projectID}/jointgvcf/scripts/*.sh
     for chrCode in `seq 1 $cleanChrLen`
     do 
@@ -302,7 +312,6 @@ function usage() {
 ############ default values
 #parameters to aligner
 inputFormat=STDFQ
-tparam=250
 ####
 force=no
 #enforceStrict=no
@@ -328,7 +337,7 @@ do
     --supportFrame )    ### critical to specify the output file
         shift
         supportFrame=$1;;
-    --tparam )
+    --aligner-tparam )
         shift
         tparam=$1;;
     # the main 3 steps of the program: align or gvcf or jointvcf
@@ -344,13 +353,25 @@ do
     --force)
         shift
         force=$1;;
-#NP: what is the point of this option?
+# @pontikos: what is the point of this option @vplagnol ?
     #--enforceStrict)
         #shift
         #enforceStrict=$1;;
     --inputFormat)
         shift
         inputFormat=$1;;
+    --nhours)
+        shift
+        nhours=$1;;
+    --ncores)
+        shift
+        ncores=$1;;
+    --vmem)
+        shift
+        vmem=$1;;
+    --aligner-memory)
+        shift
+        memory2=$1;;
     -* )
         echo "Unrecognized option: $1"
         usage
@@ -379,8 +400,10 @@ fi
 GATK=${Software}/GenomeAnalysisTK-3.3-0/GenomeAnalysisTK.jar
 #$java -Djava.io.tmpdir=${tempFolder} -Xmx4g -jar ${GATK}
 HaplotypeCaller="$java -Djava.io.tmpdir=${tempFolder} -Xmx5g -jar $GATK -T HaplotypeCaller"
-novoalign=${Software}/novocraft3/novoalign
-novosort=${Software}/novocraft3/novosort
+#novoalign=${Software}/novocraft3/novoalign
+#novosort=${Software}/novocraft3/novosort
+novoalign=/cluster/project8/vyp/pontikos/Software/novocraft/novoalign
+novosort=/cluster/project8/vyp/pontikos/Software/novocraft/novosort
 samblaster=${Software}/samblaster/samblaster
 ##samtools
 samtools=${Software}/samtools-1.1/samtools
@@ -432,11 +455,8 @@ do
 done
 
 
-###########################################################
-ncores=1
-vmem=1
-memory2=5  ##used for the sort function, seem to crash when using 10
-scratch=0
+#what is the purpose of scratch?
+scratch=1
 
 ### Check format of support file.
 ##should accept tab or space as delimiters
@@ -450,7 +470,7 @@ if [[ "$mustBeF2" != "f2" ]]; then stop "The third column of the file $supportFr
 
 ############################### creates folders required for qsub and writing logs
 mkdir -p $projectID
-cp $supportFrame $projectID/
+#cp -f $supportFrame $projectID/
 supportFrame=${projectID}/`basename $supportFrame`
 touch ${projectID}/README
 echo "
