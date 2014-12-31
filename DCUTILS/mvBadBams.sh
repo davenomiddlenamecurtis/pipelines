@@ -31,8 +31,18 @@ do
 	then 
 	echo Will keep $outFile
 	else 
-	echo Will remove $outFile with
+	if [ .$1 == ".doit" ]
+	then 
+	echo Removing $outFile with
 	echo mv $outFile $trashFolder
 	mv $outFile $trashFolder
+	else
+	echo Would remove $outFile with
+	echo mv $outFile $trashFolder
+	fi
 	fi
 done
+
+	if [ ! .$1 == ".doit" ]
+	echo To actually move truncated files, run script with argument "doit"
+	fi
