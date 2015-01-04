@@ -19,10 +19,11 @@ echo Using $oFolder as location for bam files
 trashFolder=$oFolder/trash
 if [ ! -e $trashFolder ]; then mkdir $trashFolder; fi
 
+rm $trashFolder/*
+
 find $oFolder -name '*.bam' -print | while read outFile ;
 do 
-    rm std.err
-	echo nothing > std.err
+    echo nothing > std.err
 	$samtools view -H $outFile > /dev/null 2> std.err
 	truncated=`fgrep truncated std.err`
 	# echo outFile=$outFile, truncated=$truncated.
@@ -30,8 +31,18 @@ do
 	then 
 	echo Will keep $outFile
 	else 
-	echo Will remove $outFile with
+	if [ .$1 == ".doit" ]
+	then 
+	echo Removing $outFile with
 	echo mv $outFile $trashFolder
-	# mv $outFile $trashFolder
+	mv $outFile $trashFolder
+	else
+	echo Would remove $outFile with
+	echo mv $outFile $trashFolder
+	fi
 	fi
 done
+
+	if [ ! .$1 == ".doit" ]
+	echo To actually move truncated files, run script with argument "doit"
+	fi
