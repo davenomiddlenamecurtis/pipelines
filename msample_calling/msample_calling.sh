@@ -9,6 +9,7 @@ fasta=/scratch2/vyp-scratch2/reference_datasets/human_reference_sequence/human_g
 bundle=/scratch2/vyp-scratch2/reference_datasets/GATK_bundle
 
 Rscript=/share/apps/R-3.1.0/bin/Rscript
+Rbin=/share/apps/R-3.1.0/bin/R
 
 java=/share/apps/jdk1.7.0_45/bin/java
 tmpDir=/scratch0/vyp
@@ -52,6 +53,9 @@ until [ -z "$1" ]; do
 	--annovar )
 	    shift
 	    annovar=$1;;
+	--convertToR )
+	    shift
+	    convertToR=$1;;
 	--gVCFlist )
 	    shift
 	    gVCFlist=$1;;
@@ -219,10 +223,11 @@ $java -Xmx${memoSmall}g -jar ${GATK} -T ApplyRecalibration -R $fasta \
 $java -Djava.io.tmpdir=${tmpDir} -Xmx${memoSmall}g -jar ${GATK} \
        -T CombineVariants --assumeIdenticalSamples \
        -R $fasta \
-       -V ${output}_chr${chr}_SNPs_filtered.vcf.gz \
-       -V ${output}_chr${chr}_indels_filtered.vcf.gz \
+       --variant:SNPs ${output}_chr${chr}_SNPs_filtered.vcf.gz \
+       --variant:indels ${output}_chr${chr}_indels_filtered.vcf.gz \
+       -genotypeMergeOptions PRIORITIZE  \
+       -priority SNPs,indels \
        -o ${output}_chr${chr}_filtered.vcf
-
 
 rm -rf $tmpDir
 
@@ -259,6 +264,23 @@ python /cluster/project8/vyp/vincent/Software/pipeline/GATK_v2/annovar_vcf_combi
     done
 fi
 
+
+if [[ "$convertToR" == "yes" ]]; then
+    
+    if [ ! -e ${output}_snpStats ]; then mkdir ${output}_snpStats; echo "Created ${output}_snpStats"; fi
+
+    for chr in `seq 1 22` X; do
+	
+	script=cluster/submission/subscript_chr${chr}.sh
+	
+	echo "
+perl /cluster/project8/vyp/vincent/Software/pipeline/GATK_v2/make_matrix_calls.pl ${output}_exome_table.csv ${output}
+
+$Rbin CMD BATCH --no-save --no-restore --chromosome=${chr} --root=${output} /cluster/project8/vyp/vincent/Software/pipeline/msample_calling/convert_to_R.R cluster/R/convert_to_R_chr${chr}.out
+" >> $script
+	
+    done
+fi
 
 ##############################
 for chr in `seq 1 22` X; do
