@@ -6,7 +6,7 @@ set -e
 # this forces all variables to be defined
 set -u
 # for debugging prints out every line before executing it
-#set -x
+set -x
 
 # This script does the following three tasks:
 # 1) Run alignment to generate BAM and SAM files.
@@ -135,6 +135,73 @@ function mode_gvcf_unsplit() {
     #end of while loop
 }
 
+
+
+####################### Bedtools coverageBed of BAM files #####################################################################
+# Take as input the sorted, unique per sample BAM files, and the capture bed files and produces the coverage files
+# Input: BAM files. BED files
+function mode_coverage() {
+    input=${projectID}/align/data/
+    output=${projectID}/coverage/data/
+    mkdir -p $output
+    nhours=${nhours-4}
+    ncores=${ncores-2}
+    vmem=${vmem-4}
+    # Macrogen capture file
+    #bed=/cluster/project8/IBDAJE/SureSelect/from_Macrogen/SureSelect_v4.bed
+    bed=/goon2/project99/IBDAJE_raw/Macrogen/nochr_SureSelect_v4.bed
+    while read code f1 f2
+    do
+    bam=${input}/${code}_sorted_unique.bam  
+    #if file is empty stop
+    [ ! -s $bam ] && stop "${bam} does not exist" 
+cat >${mainScript%.sh}_${code}.sh << EOL
+$coverageBed -abam ${bam} -b ${bed} -d > ${output}/${code}_depth.txt
+EOL
+    done < <(tail -n +2 $supportFrame)
+}
+
+
+####################### vcftools missingness in VCF files #####################################################################
+# Take as input the VCF files and reports missingness
+# Input: VCF files
+function mode_missingness() {
+    input=${projectID}/gvcf/data/
+    input=${projectID}/missingness/data/
+    mkdir -p $output
+    nhours=${nhours-6}
+    ncores=${ncores-1}
+    vmem=${vmem-2}
+    # Macrogen capture file
+    bed=/cluster/project8/IBDAJE/SureSelect/from_Macrogen/SureSelect_v4.bed
+    while read code f1 f2
+    do
+        ##one job per chromosome to save time
+        for chrCode in `seq 1 $cleanChrLen`
+        do
+            chrCleanCode=${cleanChr[ $chrCode ]}
+            #sometimes the dict index contains just the chrom number sometimes
+            #it contains chr<number>
+            #should check which scenario where are in
+            ##if the index is not there, we assume that we have to do the whole job
+            if [ ! -s ${output}/${code}_chr${chrCleanCode}.gvcf.gz.tbi ] || [ "$force" == "yes" ]
+            then
+              echo ${output}/${code}_chr${chrCleanCode}.gvcf.gz.tbi does not exist
+              #if file is empty stop
+              [ ! -s ${input}/${code}_sorted_unique.bam ] && stop "${input}/${code}_sorted_unique.bam does not exist" 
+cat >${mainScript%.sh}_${code}_chr${chrCode}.sh << EOL
+    vcftools --bed ${bed} --gzvcf ${gvcf} --minGQ 20 --minDP 10 --recode --out ${out} > log
+    vcftools --vcf ${out}.recode.vcf --missing-indv --out Levine_${chr}_missing
+EOL
+            else
+                rm -f ${mainScript%.sh}_${code}_chr${chrCode}.sh
+            fi
+        done
+    done < <(tail -n +2 $supportFrame)
+}
+
+
+
 ####################### GATK HaplotypeCaller split by chromosome  ############################################################
 # Take as input the sorted, unique per sample BAM files and produces the gVCF files
 # Splits by chromosome.
@@ -212,18 +279,20 @@ function mode_gvcf() {
 function mode_combinegvcf() {
     nhours=${nhours-12}
     ncores=${ncores-1}
-    vmem=${vmem-4}
+    vmem=${vmem-6}
+    input=${projectID}/gvcf/data/
+    output=${projectID}/combinegvcf/data/
+    mkdir -p $output
     ##one script per chromosome
     for chrCode in `seq 1 $cleanChrLen`
     do
         chrCleanCode=${cleanChr[ $chrCode ]}
-        VARIANTS=`echo aligned/*/*_chr${chrCode}.gvcf.gz | xargs -n1 | xargs -I f echo -n ' --variant' f`
+        VARIANTS=`echo $input/*_chr${chrCleanCode}.gvcf.gz | xargs -n1 | xargs -I f echo -n ' --variant' f`
         echo "
-        $java -Djava.io.tmpdir=${tempFolder} -Xmx4g -jar $GATK \
-        -T CombineGVCFs \
+        $CombineGVCFs \
         -R $fasta \
         -L ${chrPrefix}${chrCleanCode} \
-        -o ${mode}/chr${chr}.gvcf.gz \
+        -o ${output}/chr${chrCleanCode}.gvcf.gz \
         $VARIANTS
         " > ${mainScript%.sh}_chr${chrCode}.sh
     done
@@ -289,6 +358,62 @@ function mode_jointgvcf() {
 }
 
 
+####################### GATK CombineGVCFs   ##################################################################################
+### 
+### 
+### 
+function mode_CombineGVCFs() {
+    nhours=${nhours-30}
+    ncores=${ncores-1}
+    vmem=${vmem-9}
+    tc=${tc-80}
+    rm -f ${projectID}/CombinedGVCFs/scripts/*.sh
+    if [[ ! -f $supportFile ]]
+    then
+        stop "support file does not exists"
+    fi
+    while IFS=',' read -r chrCleanCode input
+    do
+       #echo $chrCode $output
+       VARIANTS=`echo --variant $input | sed 's/,/ --variant /g'`
+       echo "
+       $java -Djava.io.tmpdir=${tempFolder} -Xmx7g -jar $GATK \
+       -T CombineGVCFs \
+       -R $fasta \
+       -L ${chrPrefix}${chrCleanCode} \
+       -o ${output}/chr${chrCleanCode}.gvcf.gz \
+       $VARIANTS
+       " > ${mainScript%.sh}_chr${chrCleanCode}.sh
+    done < <(tail -n+2 $supportFile) 
+}
+
+
+####################### VEP annotation      ##################################################################################
+### 
+### 
+### 
+function mode_annotation() {
+    input=${projectID}/jointgvcf/data/
+    output=${projectID}/annotation/data/
+    mkdir -p ${output}
+    nhours=${nhours-12}
+    ncores=${ncores-1}
+    vmem=${vmem-2}
+    rm -f ${projectID}/annotation/scripts/*.sh
+    for chrCode in `seq 1 $cleanChrLen`
+    do
+        INPUT=${input}/jointgvcf_chr${chrCode}.vcf.gz 
+        ##if the index is missing, or we use the "force" option
+        [[ ! -s ${INPUT} ]] && error "${INPUT} MISSING"
+       #echo $chrCode $output
+       DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )/../annotation/
+cat >${mainScript%.sh}_chr${chrCode}.sh << EOL
+python $DIR/multiallele_to_single_gvcf.py $INPUT > ${output}/annotation_chr${chrCode}-single.vcf
+bash $DIR/run_VEP.sh --vcfin ${output}/annotation_chr${chrCode}-single.vcf --chr $chrCode --reference $reference --vcfout ${output}/VEP_${chrCode}.vcfout
+EOL
+   done
+}
+
 
 
 ###
@@ -298,6 +423,7 @@ function usage() {
     echo "--extraID : writes to the ReadGroup of the aligner "
     echo "--tempFolder : temp directory for the java picard code"
     echo "--supportFrame : critical to specify the output file"
+    echo "--supportFile : for joining gVCF files"
     echo "--tparam : novoalign -t argument "
     echo "--projectID : directory under which all processing happens"
     echo "--reference"
@@ -337,6 +463,9 @@ do
     --supportFrame )    ### critical to specify the output file
         shift
         supportFrame=$1;;
+    --supportFile )    
+        shift
+        supportFile=$1;;
     --aligner-tparam )
         shift
         tparam=$1;;
@@ -400,13 +529,16 @@ fi
 GATK=${Software}/GenomeAnalysisTK-3.3-0/GenomeAnalysisTK.jar
 #$java -Djava.io.tmpdir=${tempFolder} -Xmx4g -jar ${GATK}
 HaplotypeCaller="$java -Djava.io.tmpdir=${tempFolder} -Xmx5g -jar $GATK -T HaplotypeCaller"
-#novoalign=${Software}/novocraft3/novoalign
-#novosort=${Software}/novocraft3/novosort
-novoalign=/cluster/project8/vyp/pontikos/Software/novocraft/novoalign
-novosort=/cluster/project8/vyp/pontikos/Software/novocraft/novosort
+CombineGVCFs="$java -Djava.io.tmpdir=${tempFolder} -Xmx4g -jar $GATK -T CombineGVCFs"
+novoalign=${Software}/novocraft3/novoalign
+novosort=${Software}/novocraft3/novosort
+#novoalign=/cluster/project8/vyp/pontikos/Software/novocraft/novoalign
+#novosort=/cluster/project8/vyp/pontikos/Software/novocraft/novosort
 samblaster=${Software}/samblaster/samblaster
 ##samtools
 samtools=${Software}/samtools-1.1/samtools
+##bedtools
+coverageBed=${Software}/bedtools-2.17.0/bin/coverageBed
 ## Picard
 picard=${Software}/picard-tools-1.100/
 picard_CreateSequenceDictionary=${picard}/CreateSequenceDictionary.jar 
@@ -454,30 +586,34 @@ do
     fi
 done
 
-
-#what is the purpose of scratch?
-scratch=1
-
 ### Check format of support file.
 ##should accept tab or space as delimiters
 ## but does read support tabs and delimeters?
-mustBeCode=`head -n1 $supportFrame | cut -f1 -d' ' | cut -f1`  
-mustBeF1=`head -n1 $supportFrame | cut -f2 -d' ' | cut -f2`
-mustBeF2=`head -n1 $supportFrame | cut -f3 -d' ' | cut -f3`
-if [[ "$mustBeCode" != "code" ]]; then stop "The first column of the file $supportFrame must have the name code $mustBeCode"; fi
-if [[ "$mustBeF1" != "f1" ]]; then stop "The second column of the file $supportFrame must have the name f1"; fi
-if [[ "$mustBeF2" != "f2" ]]; then stop "The third column of the file $supportFrame must have the name f2"; fi
+if [[ "$mode" != "CombineGVCFs" ]]
+then
+    mustBeCode=`head -n1 $supportFrame | cut -f1 -d' ' | cut -f1`  
+    mustBeF1=`head -n1 $supportFrame | cut -f2 -d' ' | cut -f2`
+    mustBeF2=`head -n1 $supportFrame | cut -f3 -d' ' | cut -f3`
+    if [[ "$mustBeCode" != "code" ]]; then stop "The first column of the file $supportFrame must have the name code $mustBeCode"; fi
+    if [[ "$mustBeF1" != "f1" ]]; then stop "The second column of the file $supportFrame must have the name f1"; fi
+    if [[ "$mustBeF2" != "f2" ]]; then stop "The third column of the file $supportFrame must have the name f2"; fi
+else
+    supportFrame=$supportFile
+fi
 
 ############################### creates folders required for qsub and writing logs
 mkdir -p $projectID
-#cp -f $supportFrame $projectID/
-supportFrame=${projectID}/`basename $supportFrame`
+#symlink the supportFrame to a known location
+supportFrameLink=${projectID}/`basename $supportFrame`
+ln -sf $supportFrame  $supportFrameLink
+supportFrame=$supportFrameLink
 touch ${projectID}/README
 echo "
 "
 > ${projectID}/README 
 
 mkdir -p ${projectID}/$mode/data ${projectID}/$mode/scripts ${projectID}/$mode/out ${projectID}/$mode/err 
+output=${projectID}/$mode/data
 mainScript=${projectID}/$mode/scripts/$mode.sh
 # call function (see above)
 echo mode_${mode}
@@ -495,11 +631,11 @@ echo "
 #$ -V
 #$ -R y 
 #$ -pe smp ${ncores}
-#$ -l scr=${scratch}G
+#$ -l scr=${scratch-1}G
 #$ -l tmem=${vmem}G,h_vmem=${vmem}G
 #$ -l h_rt=${nhours}:0:0
 #$ -t 1-${njobs}
-#$ -tc 25
+#$ -tc ${tc-25}
 set -u
 set -x
 mkdir -p ${projectID}/${mode}/scripts ${projectID}/${mode}/data ${projectID}/${mode}/err ${projectID}/${mode}/out
